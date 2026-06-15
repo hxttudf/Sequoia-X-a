@@ -1,0 +1,10 @@
+services:
+  sequoia:
+    build: .
+    container_name: sequoia-x
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
