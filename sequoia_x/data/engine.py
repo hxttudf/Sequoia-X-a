@@ -159,10 +159,11 @@ class DataEngine:
         """通过 baostock 批量回填历史日 K 线数据（后复权）。
 
         容错机制：
-        - 单只股票失败自动重试 3 次，间隔递增（2s/4s/8s）
+        - 单只股票查询 30s 超时 + 自动重试 3 次，间隔递增（2s/4s/8s）
         - 每 200 只股票自动重连 baostock（防止长连接超时）
         - 已入库的自动 skip，中断后可重跑续传
         """
+        import signal
         import time
         from datetime import date, timedelta
 
@@ -170,7 +171,14 @@ class DataEngine:
 
         today_str = date.today().strftime("%Y-%m-%d")
         max_retries = 3
-        reconnect_interval = 200  # 每处理 N 只股票重连一次
+        reconnect_interval = 200
+        query_timeout = 30  # 单次查询超时秒数
+
+        class QueryTimeout(Exception):
+            pass
+
+        def _timeout_handler(signum, frame):
+            raise QueryTimeout("baostock query timeout")
 
         def _login():
             lg = bs.login()
@@ -181,6 +189,8 @@ class DataEngine:
 
         if not _login():
             return
+
+        old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
 
         success = 0
         skipped = 0
@@ -220,6 +230,7 @@ class DataEngine:
                 query_ok = False
                 for attempt in range(max_retries):
                     try:
+                        signal.alarm(query_timeout)
                         rs = bs.query_history_k_data_plus(
                             bs_code,
                             "date,open,high,low,close,volume,amount",
@@ -228,6 +239,7 @@ class DataEngine:
                             frequency="d",
                             adjustflag="1",  # 后复权
                         )
+                        signal.alarm(0)
 
                         if rs.error_code != "0":
                             raise RuntimeError(rs.error_msg)
@@ -238,7 +250,21 @@ class DataEngine:
                         query_ok = True
                         break
 
+                    except QueryTimeout:
+                        signal.alarm(0)
+                        if attempt < max_retries - 1:
+                            wait = 2 ** (attempt + 1)
+                            logger.warning(
+                                f"[{symbol}] 第{attempt + 1}次超时，{wait}s 后重试"
+                            )
+                            time.sleep(wait)
+                            bs.logout()
+                            time.sleep(1)
+                            _login()
+                        else:
+                            logger.warning(f"[{symbol}] {max_retries}次均超时，跳过")
                     except Exception as exc:
+                        signal.alarm(0)
                         if attempt < max_retries - 1:
                             wait = 2 ** (attempt + 1)
                             logger.warning(
@@ -292,6 +318,8 @@ class DataEngine:
                     )
 
         finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
             bs.logout()
 
         logger.info(f"回填完成 — 成功: {success} | 跳过: {skipped} | 失败: {failed}")
