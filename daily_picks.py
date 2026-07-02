@@ -460,7 +460,11 @@ def pick_top10(data, weights):
 def backfill_top10_returns():
     conn = sqlite3.connect(DB_PATH)
     today = date.today().strftime("%Y-%m-%d")
-    rows = conn.execute("SELECT id,date,symbol FROM daily_top10 WHERE ret_1d IS NULL AND date < ?", (today,)).fetchall()
+    # 同时检查所有收益列，避免 ret_1d已填但ret_3d未填的情况
+    rows = conn.execute(
+        "SELECT id,date,symbol FROM daily_top10 "
+        "WHERE (ret_1d IS NULL OR ret_3d IS NULL OR ret_5d IS NULL OR ret_10d IS NULL) "
+        "AND date < ?", (today,)).fetchall()
     if not rows: conn.close(); return
     updated = 0
     for row_id, pick_date, sym in rows:
