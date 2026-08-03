@@ -14,6 +14,11 @@ TODAY = date.today().isoformat()
 FAIL_LOG_DIR = 'data'
 
 
+def now_str():
+    """当前时间戳(拉取更新时间, 写入stock_daily.update_time)"""
+    return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+
 def fetch_one(code, name, market):
     klines = backfill_v2.fetch_kline_tx(code, market)
     if not klines:
@@ -45,8 +50,8 @@ def main():
     ).fetchall()}
     print(f'今日已有: {len(existing_today)} 只')
 
-    to_fetch = [t for t in filtered if t[0] not in existing_today]
-    print(f'需获取: {len(to_fetch)} 只')
+    to_fetch = filtered  # 每次都全量重拉当天(覆盖盘中数据, update_time记录真实拉取时刻)
+    print(f'需获取: {len(to_fetch)} 只(强制刷新当天)')
 
     if not to_fetch:
         conn.close()
@@ -77,9 +82,9 @@ def main():
                 if len(batch) >= 200:
                     conn.executemany(
                         'INSERT OR REPLACE INTO stock_daily '
-                        '(symbol,date,open,high,low,close,volume,turnover,close_qfq) '
-                        'VALUES (?,?,?,?,?,?,?,?,?)',
-                        batch
+                        '(symbol,date,open,high,low,close,volume,turnover,close_qfq,update_time) '
+                        'VALUES (?,?,?,?,?,?,?,?,?,?)',
+                        [b + (now_str(),) for b in batch]
                     )
                     conn.commit()
                     elapsed = (datetime.now() - t0).total_seconds()
@@ -91,9 +96,9 @@ def main():
     if batch:
         conn.executemany(
             'INSERT OR REPLACE INTO stock_daily '
-            '(symbol,date,open,high,low,close,volume,turnover,close_qfq) '
-            'VALUES (?,?,?,?,?,?,?,?,?)',
-            batch
+            '(symbol,date,open,high,low,close,volume,turnover,close_qfq,update_time) '
+            'VALUES (?,?,?,?,?,?,?,?,?,?)',
+            [b + (now_str(),) for b in batch]
         )
         conn.commit()
 
