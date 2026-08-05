@@ -121,7 +121,7 @@ def compute_stats(lookback=10):
     for sname in ["MaVolumeStrategy","TurtleTradeStrategy","HighTightFlagStrategy",
                   "LimitUpShakeoutStrategy","UptrendLimitDownStrategy","RpsBreakoutStrategy",
                   "PrivatePlacementStrategy","FiftyTwoWeekHighStrategy","LimitUpPullbackStrategy",
-                  "MABullishMACDStrategy","BollingerSqueezeStrategy"]:
+                  "MABullishMACDStrategy","BollingerSqueezeStrategy","BottomFirstVolStrategy"]:
         # T+1 stats
         stats_1d = conn.execute(
             f"SELECT COUNT(*), SUM(CASE WHEN next_return>0 THEN 1 ELSE 0 END), AVG(next_return) "
@@ -204,7 +204,7 @@ def recompute_historical_stats(lookback=10):
     strategies = ["MaVolumeStrategy", "TurtleTradeStrategy", "HighTightFlagStrategy",
                   "LimitUpShakeoutStrategy", "UptrendLimitDownStrategy", "RpsBreakoutStrategy",
                   "PrivatePlacementStrategy", "FiftyTwoWeekHighStrategy", "LimitUpPullbackStrategy",
-                  "MABullishMACDStrategy", "BollingerSqueezeStrategy"]
+                  "MABullishMACDStrategy", "BollingerSqueezeStrategy","BottomFirstVolStrategy"]
 
     updated = 0
     for i, target_date in enumerate(all_dates):
@@ -454,6 +454,44 @@ def pick_top10(data, weights):
     conn.close()
     n_overall = len([r for r in all_results if r['category']=='overall'])
     n_main = len([r for r in all_results if r['category']=='mainboard'])
+
+    # ── 早鸟 Top10（BottomFirstVol 单独榜单） ──
+    conn = sqlite3.connect(DB_PATH)
+    early_rows = conn.execute(
+        "SELECT symbol, name, close_price FROM strategy_picks "
+        "WHERE date=? AND strategy='BottomFirstVolStrategy'", (run_date,)).fetchall()
+    if early_rows:
+        conn.execute("DELETE FROM daily_top10 WHERE date=? AND category='early_bird'", (run_date,))
+        # 算一个简单的强度分：放量倍数 × (1 - MA60距离/0.15)
+        early_scored = []
+        for sym, nm, cp in early_rows:
+            row = conn.execute(
+                "SELECT d.close_qfq, d.volume, "
+                "(SELECT AVG(d2.volume) FROM stock_daily d2 WHERE d2.symbol=d.symbol AND d2.date<d.date AND d2.date>=date(d.date,'-20 days')) as vol_ma20, "
+                "(SELECT AVG(d2.close_qfq) FROM stock_daily d2 WHERE d2.symbol=d.symbol AND d2.date<d.date AND d2.date>=date(d.date,'-60 days')) as ma60 "
+                "FROM stock_daily d WHERE d.symbol=? AND d.date=?",
+                (sym, run_date)).fetchone()
+            if row and row[0] and row[1] and row[2] and row[2] > 0 and row[3] and row[3] > 0:
+                vol_ratio = row[1] / row[2]
+                ma60_dist = row[0] / row[3] - 1
+                if 0 < ma60_dist < 0.15:
+                    strength = round(vol_ratio * (1 - ma60_dist / 0.15), 3)
+                else:
+                    strength = round(vol_ratio * 0.5, 3)
+            else:
+                strength = 0
+            early_scored.append((sym, nm or sym, cp or 0, strength))
+
+        early_scored.sort(key=lambda x: -x[3])
+        for rank, (sym, nm, cp, sc) in enumerate(early_scored[:10], 1):
+            conn.execute(
+                "INSERT OR IGNORE INTO daily_top10 (date,category,rank,symbol,name,score,strategies,close_price) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (run_date, 'early_bird', rank, sym, nm, sc, 'BottomFirstVol', cp))
+        conn.commit()
+        log(f"早鸟榜单: {min(len(early_scored),10)} 只")
+    conn.close()
+
     log(f"精选榜单: 全市场{n_overall} + 主板{n_main} = {len(all_results)} 只")
     return all_results
 
@@ -540,7 +578,7 @@ def show_summary(lookback=10):
     print(f"🔥 精选榜单 ({today})")
     print(f"{'='*60}")
 
-    for cat, cat_label in [("overall", "全市场 Top10"), ("mainboard", "主板 Top10")]:
+    for cat, cat_label in [("overall", "全市场 Top10"), ("mainboard", "主板 Top10"), ("early_bird", "早鸟 Top10")]:
         print(f"\n  【{cat_label}】")
         print(f"  {'#':<4}{'代码':<8}{'名称':<8}{'得分':>6}  策略共振")
         print("  " + "-"*56)
@@ -613,5 +651,15 @@ if __name__ == "__main__":
     top10 = pick_top10(data, weights)
     backfill_top10_returns()
     analyze_strategies(weights)
+
+    # 自进化引擎：底部首放量参数优化
+    try:
+        log("运行自进化引擎...")
+        from sequoia_x.strategy.optimizer import run_daily
+        new_params = run_daily()
+        log(f"自进化引擎完成，参数: {new_params}")
+    except Exception as e:
+        log(f"自进化引擎异常: {e}")
+
     show_summary()
     log("完成")

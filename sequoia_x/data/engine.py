@@ -80,7 +80,7 @@ class DataEngine:
     def get_ohlcv(self, symbol: str) -> pd.DataFrame:
         with sqlite3.connect(self.db_path) as conn:
             df = pd.read_sql(
-                "SELECT * FROM stock_daily WHERE symbol = ? ORDER BY date",
+                "SELECT * FROM stock_daily WHERE symbol = ? AND date >= date('now', '-300 days') ORDER BY date",
                 conn,
                 params=(symbol,),
             )

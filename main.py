@@ -32,6 +32,8 @@ from sequoia_x.strategy.fiftytwo_week_high import FiftyTwoWeekHighStrategy
 from sequoia_x.strategy.limit_up_pullback import LimitUpPullbackStrategy
 from sequoia_x.strategy.ma_bullish_macd import MABullishMACDStrategy
 from sequoia_x.strategy.bollinger_squeeze import BollingerSqueezeStrategy
+from sequoia_x.strategy.bottom_first_vol import BottomFirstVolStrategy
+from sequoia_x.strategy.optimizer import run_daily as run_optimizer
 
 
 _STOCK_NAME_CACHE: dict[str, str] = {}
@@ -119,7 +121,15 @@ def main() -> None:
             LimitUpPullbackStrategy(engine=engine, settings=settings),
             MABullishMACDStrategy(engine=engine, settings=settings),
             BollingerSqueezeStrategy(engine=engine, settings=settings),
+            BottomFirstVolStrategy(engine=engine, settings=settings),
         ]
+
+        # 自进化：更新 BottomFirstVol 的参数
+        for s in strategies:
+            if isinstance(s, BottomFirstVolStrategy):
+                new_params = run_optimizer()
+                s.update_params(new_params)
+                break
 
         results: list[dict] = []
 

@@ -19,7 +19,7 @@ class RSRSBreakoutStrategy(BaseStrategy):
     def run(self) -> list[str]:
         try:
             with sqlite3.connect(self.engine.db_path) as conn:
-                df = pd.read_sql("SELECT symbol, date, open, high, low, close FROM stock_daily", conn)
+                df = pd.read_sql("SELECT symbol, date, open, high, low, close FROM stock_daily WHERE date >= date('now', '-300 days')", conn)
         except Exception as exc:
             logger.error(f"读取数据库失败: {exc}")
             return []

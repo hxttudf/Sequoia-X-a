@@ -108,15 +108,13 @@ def main():
 
     total = len(missing)
     done = 0
-    fails = 0
-    updated = 0
+    failures = []
 
-    # 先回填缺失的
+    # 第一遍：静默回填，不打印中间进度
     for code, name, market in missing:
         try:
             klines = fetch_kline(code, market)
             if klines:
-                # 计算 turnover（成交额），如果没提供就估算
                 conn.executemany(
                     "INSERT OR REPLACE INTO stock_daily (symbol, date, open, high, low, close, volume, turnover) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -126,22 +124,53 @@ def main():
                 )
                 conn.commit()
                 done += 1
-                if done % 100 == 0:
-                    elapsed = time.time() - t0
-                    rate = done / elapsed if elapsed > 0 else 0
-                    eta = (total - done) / rate if rate > 0 else 0
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 新回填 {done}/{total} "
-                          f"({done*100//total}%), 速度 {rate:.1f}/s, 预计剩余 {eta/60:.0f}min")
             else:
-                fails += 1
+                failures.append((code, name, market))
             time.sleep(SLEEP)
         except Exception as e:
-            fails += 1
-            if fails <= 5:
-                print(f"  [{code}] 回填失败: {e}")
+            failures.append((code, name, market))
             time.sleep(0.5)
 
-    print(f"\n新回填完成！成功 {done} 只，失败 {fails} 只")
+    print(f"第一遍完成：成功 {done}/{total}，失败 {len(failures)}")
+
+    # 第二遍：重试失败的（最多3轮）
+    if failures:
+        print(f"开始重试 {len(failures)} 只失败股票...")
+        for retry_round in range(1, 4):
+            if not failures:
+                break
+            retry_list = list(failures)
+            failures = []
+            retry_ok = 0
+            for code, name, market in retry_list:
+                try:
+                    klines = fetch_kline(code, market)
+                    if klines:
+                        conn.executemany(
+                            "INSERT OR REPLACE INTO stock_daily (symbol, date, open, high, low, close, volume, turnover) "
+                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                            [(code, k["date"], k["open"], k["high"], k["low"], k["close"], 
+                              k["volume"], k["volume"] * k["close"])
+                             for k in klines]
+                        )
+                        conn.commit()
+                        done += 1
+                        retry_ok += 1
+                    else:
+                        failures.append((code, name, market))
+                    time.sleep(SLEEP)
+                except Exception:
+                    failures.append((code, name, market))
+                    time.sleep(0.5)
+            print(f"  第{retry_round}轮重试：成功 {retry_ok}，剩余失败 {len(failures)}")
+
+    print(f"\n最终结果：成功 {done}/{total} 只，失败 {len(failures)} 只")
+    if failures:
+        print(f"失败列表（{len(failures)}只）：")
+        for c, n, _ in failures[:10]:
+            print(f"  {c} {n}")
+        if len(failures) > 10:
+            print(f"  ...等{len(failures)}只")
     
     # 再增量更新已入库的（只拉最近一周）
     print(f"\n增量更新已入库股票...")
