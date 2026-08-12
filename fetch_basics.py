@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """拉取全市场基本面数据到 stock_basics 表 (PE/PB/市值等)"""
+import re
 import sqlite3, subprocess, json, time
 from datetime import date
 
@@ -39,7 +40,7 @@ def fetch_all_basics():
                     "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         code, today,
-                        s.get("name", ""),
+                        re.sub(r'^(XD|XR|DR)', '', s.get("name", "") or ""),
                         float(s.get("trade", 0) or 0),
                         float(s.get("per", 0) or 0),
                         float(s.get("pb", 0) or 0),
