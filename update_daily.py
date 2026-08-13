@@ -127,6 +127,13 @@ def main():
         'elapsed_min': round(elapsed, 1)
     }
     print(json.dumps(summary, ensure_ascii=False))
+    # 记录K线更新日志(最新交易日, 供查询端直接使用, 免每只MAX(date))
+    try:
+        conn.execute("CREATE TABLE IF NOT EXISTS kline_update_log (id INTEGER PRIMARY KEY AUTOINCREMENT, latest_date TEXT, updated_at TEXT, source TEXT)")
+        conn.execute("INSERT INTO kline_update_log (latest_date, updated_at, source) VALUES (?, datetime('now','localtime'), 'update_daily')", (TODAY,))
+        conn.commit()
+    except Exception as e:
+        print(f'更新日志写入失败: {e}')
 
     if not ok:
         print(f'⚠ 失败率 {fail_rate:.1%} 超标（阈值5%），退出码1')
