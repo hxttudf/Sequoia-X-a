@@ -11,11 +11,11 @@ TODAY = datetime.now().strftime('%Y-%m-%d')
 UA = {'User-Agent': 'Mozilla/5.0'}
 
 def fetch_etf_list():
-    """东财ETF列表(沪深, 分页) → [(code, name)]"""
+    """东财push2delay ETF列表(沪深, 分页) → [(code, name, mktcap)]"""
     out = []
     for pn in range(1, 30):
         url = (f"https://push2delay.eastmoney.com/api/qt/clist/get?pn={pn}&pz=200&po=1&np=1&fltt=2&invt=2"
-               f"&fid=f3&fs=b:MK0021,b:MK0022,b:MK0023,b:MK0024&fields=f12,f14")
+               f"&fid=f3&fs=b:MK0021,b:MK0022,b:MK0023,b:MK0024&fields=f12,f14,f20")
         try:
             d = json.loads(urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=15).read())
         except Exception as e:
@@ -27,7 +27,7 @@ def fetch_etf_list():
         for x in diff:
             code, name = str(x.get('f12', '')), x.get('f14', '')
             if code and name:
-                out.append((code, name))
+                out.append((code, name, x.get('f20')))
         if len(out) >= d.get('data', {}).get('total', 0):
             break
         time.sleep(0.3)
@@ -47,8 +47,9 @@ def main():
         PRIMARY KEY (symbol, date))""")
 
     done = fails = 0
-    for code, name in etfs:
-        market = 'sh' if code[0] == '5' else 'sz'
+    for code, name, mktcap in etfs:
+        # 复用A股拉取链路(腾讯fetch_kline_tx): market='1'沪 '0'深
+        market = '1' if code[0] == '5' else '0'
         try:
             klines = fetch_kline_tx(code, market)
         except Exception as e:
@@ -66,12 +67,12 @@ def main():
         conn.executemany(
             'INSERT OR REPLACE INTO stock_daily (symbol, date, open, high, low, close, volume, amount, close_qfq) '
             'VALUES (?,?,?,?,?,?,?,?,?)', batch)
-        # basics(最新价/市值估算)
+        # basics(最新价/市值用东财f20, 万元)
         last = klines[-1]
         conn.execute(
             "INSERT OR REPLACE INTO stock_basics (symbol, date, name, close, mktcap, nmc, updated_at) "
             "VALUES (?,?,?,?,?,?,datetime('now','localtime'))",
-            (code, TODAY, name, last['close'], last['close'] * 100000, last['close'] * 100000))
+            (code, TODAY, name, last['close'], (mktcap or 0) / 10000, (mktcap or 0) / 10000))
         done += 1
     conn.commit()
     conn.close()
