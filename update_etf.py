@@ -70,8 +70,8 @@ def main():
         # basics(最新价/市值用东财f20, 万元)
         last = klines[-1]
         conn.execute(
-            "INSERT OR REPLACE INTO stock_basics (symbol, date, name, close, mktcap, nmc, updated_at) "
-            "VALUES (?,?,?,?,?,?,datetime('now','localtime'))",
+            "INSERT OR REPLACE INTO stock_basics (symbol, date, name, close, mktcap, nmc, updated_at, is_etf) "
+            "VALUES (?,?,?,?,?,?,datetime('now','localtime'),1)",
             (code, TODAY, name, last['close'], (mktcap or 0) / 10000, (mktcap or 0) / 10000))
         done += 1
     conn.commit()
