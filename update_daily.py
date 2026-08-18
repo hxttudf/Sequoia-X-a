@@ -102,7 +102,6 @@ def main():
         )
         conn.commit()
 
-    conn.close()
     total_valid = len(filtered)
     fail_rate = fails / total_valid if total_valid else 0.0
     ok = fail_rate < 0.05
@@ -134,6 +133,8 @@ def main():
         conn.commit()
     except Exception as e:
         print(f'更新日志写入失败: {e}')
+    finally:
+        conn.close()  # 日志写入后再关闭连接(修复 closed database)
 
     if not ok:
         print(f'⚠ 失败率 {fail_rate:.1%} 超标（阈值5%），退出码1')
