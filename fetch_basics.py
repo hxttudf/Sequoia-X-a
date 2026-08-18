@@ -36,8 +36,8 @@ def fetch_all_basics():
             try:
                 conn.execute(
                     "INSERT OR REPLACE INTO stock_basics "
-                    "(symbol, date, name, close, pe, pb, mktcap, nmc, turnover, amount, change_pct) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    "(symbol, date, name, close, pe, pb, mktcap, nmc, turnover, amount, change_pct, updated_at) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,datetime('now','localtime'))",
                     (
                         code, today,
                         re.sub(r'^(XD|XR|DR)', '', s.get("name", "") or ""),
