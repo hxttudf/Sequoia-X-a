@@ -9,7 +9,11 @@ DB = '/home/ubuntu/Sequoia-X-a/data/sequoia_v2.db'
 OUT = '/home/ubuntu/trend-stockscope/pinyin_map.json'
 
 SC = sqlite3.connect(DB)
-rows = SC.execute("SELECT symbol, name FROM stock_basics WHERE date=(SELECT MAX(date) FROM stock_basics)").fetchall()
+# 每股取最新日期记录(不依赖统一MAX(date): 某天部分股票未写入时也能拿到全量)
+rows = SC.execute(
+    "SELECT b.symbol, b.name FROM stock_basics b "
+    "JOIN (SELECT symbol, MAX(date) md FROM stock_basics GROUP BY symbol) x "
+    "ON b.symbol=x.symbol AND b.date=x.md").fetchall()
 SC.close()
 
 pmap = {}
