@@ -63,7 +63,7 @@ def main():
         batch = []
         for k in klines:
             batch.append((code, k['date'], k['open'], k['high'], k['low'], k['close'],
-                          k['volume'], round(k['volume'] * k['close'], 2), k.get('close_qfq')))
+                          k['volume'], round(k['volume'] * k['close'], 2), (k.get('close_qfq') or k['close'])))
         conn.executemany(
             'INSERT OR REPLACE INTO stock_daily (symbol, date, open, high, low, close, volume, amount, close_qfq) '
             'VALUES (?,?,?,?,?,?,?,?,?)', batch)
