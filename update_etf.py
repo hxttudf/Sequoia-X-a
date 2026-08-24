@@ -48,8 +48,8 @@ def main():
 
     done = fails = 0
     for code, name, mktcap in etfs:
-        # 复用A股拉取链路(腾讯fetch_kline_tx): market='1'沪 '0'深
-        market = '1' if code[0] == '5' else '0'
+        # 复用A股拉取链路(腾讯fetch_kline_tx): market必须'sh'/'sz'('1'/'0'会拿到错误价格)
+        market = 'sh' if code[0] == '5' else 'sz'
         try:
             klines = fetch_kline_tx(code, market)
         except Exception as e:
