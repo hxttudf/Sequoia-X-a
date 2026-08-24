@@ -43,6 +43,7 @@ def main():
              for r in k])
         rows += len(k)
         done += 1
+        time.sleep(0.15)  # 节流防腾讯限流(快速连续请求触发501)
         if done % 200 == 0:
             print(f"  {done}/{len(etfs)} 失败{fails} 更新{rows}行 {time.time()-t0:.0f}s", flush=True)
     c.commit()

@@ -10,6 +10,17 @@ DB = '/home/ubuntu/Sequoia-X-a/data/sequoia_v2.db'
 TODAY = datetime.now().strftime('%Y-%m-%d')
 UA = {'User-Agent': 'Mozilla/5.0'}
 
+def fqkline_qfq(code, market, start='2018-01-01', n=2000):
+    """腾讯前复权K线(close_qfq等四列): fqkline qfq接口; market传明文'sh'/'sz'"""
+    url = (f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
+           f"?param={market}{code},day,{start},2050-01-01,{n},qfq")
+    try:
+        d = json.loads(urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=15).read())
+        data = d.get('data', {}).get(market + code, {})
+        return data.get('qfqday') or data.get('day') or []
+    except Exception:
+        return []
+
 def fetch_etf_list():
     """东财push2delay ETF列表(沪深, 分页) → [(code, name, mktcap)]"""
     out = []
@@ -48,8 +59,8 @@ def main():
 
     done = fails = 0
     for code, name, mktcap in etfs:
-        # 复用A股拉取链路(腾讯fetch_kline_tx): market必须'sh'/'sz'('1'/'0'会拿到错误价格)
-        market = 'sh' if code[0] == '5' else 'sz'
+        # fetch_kline_tx的market语义: '1'→sh, '0'→sz(源码 prefix="sh" if market=="1"); fqkline用明文' sh'/'sz'
+        market = '1' if code[0] == '5' else '0'
         try:
             klines = fetch_kline_tx(code, market)
         except Exception as e:
@@ -67,6 +78,13 @@ def main():
         conn.executemany(
             'INSERT OR REPLACE INTO stock_daily (symbol, date, open, high, low, close, volume, amount, close_qfq) '
             'VALUES (?,?,?,?,?,?,?,?,?)', batch)
+        # 前复权四列: 腾讯fqkline qfq(比fetch_kline_tx的close_qfq可靠, 腾讯给ETF返回None时用close兜底会失真)
+        mpre = 'sh' if code[0] == '5' else 'sz'
+        qfq_k = fqkline_qfq(code, mpre)
+        if qfq_k:
+            conn.executemany(
+                "UPDATE stock_daily SET close_qfq=?, open_qfq=?, high_qfq=?, low_qfq=? WHERE symbol=? AND date=?",
+                [(float(r[2]), float(r[1]), float(r[3]), float(r[4]), code, r[0]) for r in qfq_k])
         # basics(最新价/市值用东财f20, 万元)
         last = klines[-1]
         conn.execute(

@@ -30,10 +30,12 @@ def main():
     real_rows = qfq_rows = 0
     t0 = time.time()
     for sym in etfs:
-        market = 'sh' if sym[0] == '5' else 'sz'
+        # fetch_kline_tx用'1'/'0'(源码语义 prefix=sh if=='1'); fqkline_qfq用明文'sh'/'sz'
+        mnum = '1' if sym[0] == '5' else '0'     # fetch_kline_tx
+        mpre = 'sh' if sym[0] == '5' else 'sz'   # fqkline_qfq
         # 1) 真实OHLC
         try:
-            k = fetch_kline_tx(sym, market)
+            k = fetch_kline_tx(sym, mnum)
             if k:
                 c.executemany(
                     "UPDATE stock_daily SET open=?, high=?, low=?, close=?, volume=? WHERE symbol=? AND date=?",
@@ -42,7 +44,7 @@ def main():
         except Exception:
             real_fail += 1
         # 2) 前复权qfq四列
-        q = fqkline_qfq(sym, market)
+        q = fqkline_qfq(sym, mpre)
         if q:
             c.executemany(
                 "UPDATE stock_daily SET close_qfq=?, open_qfq=?, high_qfq=?, low_qfq=?, update_time=? WHERE symbol=? AND date=?",
@@ -51,6 +53,7 @@ def main():
             qfq_rows += len(q)
         else:
             qfq_fail += 1
+        time.sleep(0.15)  # 节流防腾讯限流
         done += 1
         if done % 200 == 0:
             print(f"  {done}/{len(etfs)} 真实{real_fail}失败 前复权{qfq_fail}失败 真实{real_rows}行 qfq{qfq_rows}行 {time.time()-t0:.0f}s", flush=True)
