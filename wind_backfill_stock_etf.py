@@ -48,7 +48,9 @@ def write_row(conn, code, rec):
     try:
         o = float(rec.get('今日开盘价')); h = float(rec.get('今日最高价'))
         l = float(rec.get('今日最低价')); c = float(rec.get('最新成交价'))
-        v = float(rec.get('成交量') or 0); amt = float(rec.get('成交额') or 0)
+        # Wind/新浪 成交量=股; 全库历史update_daily口径=手(×100股) → 转手
+        v = (float(rec.get('成交量') or 0)) / 100.0
+        amt = float(rec.get('成交额') or 0)
     except (TypeError, ValueError):
         return False
     conn.execute(

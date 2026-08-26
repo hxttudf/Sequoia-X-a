@@ -67,6 +67,9 @@ def fetch_kline_tx(code: str, market: str) -> list[dict]:
             qfq_stock = qfq_data.get("data", {})
             if isinstance(qfq_stock, dict):
                 qfq_days = qfq_stock.get(stock_key, {}).get("qfqday", [])
+                # 次新股/无除权史: 腾讯只返回原始 day(无qfqday), 此时前复权=原价 → 回退用 day
+                if not qfq_days:
+                    qfq_days = qfq_stock.get(stock_key, {}).get("day", [])
                 for d in qfq_days:
                     if len(d) >= 3:
                         qfq_close[d[0]] = float(d[2])

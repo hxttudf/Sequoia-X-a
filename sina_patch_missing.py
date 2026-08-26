@@ -35,6 +35,8 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
         if k:
             o,h,l,c = float(k['open']), float(k['high']), float(k['low']), float(k['close'])
             v = float(k.get('volume', 0) or 0)
+            # 新浪 volume=股; 全库历史update_daily口径=手(×100股) → 转手
+            v = v / 100.0
             buf.append((code_, DATE, o,h,l,c, v, 0, c,o,h,l))
             done += 1
         else:
