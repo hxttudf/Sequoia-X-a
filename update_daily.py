@@ -36,6 +36,13 @@ def main():
     print(f'[{ts()}] 获取全量A股列表...')
     all_stocks = backfill_v2.get_all_stocks_sina()
     if not all_stocks:
+        # 降级: 用本地stock_basics表(上次fetch_basics更新的全量列表)
+        conn0 = sqlite3.connect(DB_PATH)
+        all_stocks = [(r[0], r[1], '1' if r[0].startswith(('6', '9')) else '0')
+                      for r in conn0.execute("SELECT symbol, name FROM stock_basics WHERE is_etf!=1 AND symbol NOT LIKE '%.%'")]
+        conn0.close()
+        print(f'新浪列表失败, 降级用本地表: {len(all_stocks)} 只')
+    if not all_stocks:
         print('获取A股列表失败')
         sys.exit(1)
     print(f'全量: {len(all_stocks)} 只')
@@ -50,8 +57,15 @@ def main():
     ).fetchall()}
     print(f'今日已有: {len(existing_today)} 只')
 
-    to_fetch = filtered  # 每次都全量重拉当天(覆盖盘中数据, update_time记录真实拉取时刻)
-    print(f'需获取: {len(to_fetch)} 只(强制刷新当天)')
+    # 只补缺失模式(默认): 跳过今天已成功的, 大幅缩短时长防cron超时
+    # 全量重拉: 传 --full 参数(覆盖盘中数据场景)
+    only_missing = '--full' not in sys.argv
+    if only_missing:
+        to_fetch = [(c, n, m) for c, n, m in filtered if c not in existing_today]
+        print(f'只补缺失模式: {len(to_fetch)} 只(跳过已有{len(existing_today)})')
+    else:
+        to_fetch = filtered  # 每次都全量重拉当天(覆盖盘中数据, update_time记录真实拉取时刻)
+        print(f'需获取: {len(to_fetch)} 只(强制刷新当天)')
 
     if not to_fetch:
         conn.close()
@@ -102,9 +116,13 @@ def main():
         )
         conn.commit()
 
-    total_valid = len(filtered)
+    total_valid = len(to_fetch) if to_fetch else len(filtered)
     fail_rate = fails / total_valid if total_valid else 0.0
-    ok = fail_rate < 0.05
+    # missing模式: 缺失股多为退市/长期停牌(拉不到属正常), 按绝对数判断(≤10只失败算ok)
+    if only_missing:
+        ok = fails <= 30
+    else:
+        ok = fail_rate < 0.05
 
     elapsed = (datetime.now() - t0).total_seconds() / 60
 
@@ -116,6 +134,7 @@ def main():
     # 摘要 JSON 输出（最后一行，方便 cron 解析）
     summary = {
         'date': TODAY,
+        'mode': 'missing' if only_missing else 'full',
         'total': len(all_stocks),
         'bj_skip': skipped_bj,
         'existing': len(existing_today),

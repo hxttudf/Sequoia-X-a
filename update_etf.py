@@ -142,7 +142,10 @@ def main():
         PRIMARY KEY (symbol, date))""")
 
     # 1) 优先 Wind 批量(50/批), 只拿当天收盘价填入 stock_basics + 当天K线
-    need = etfs[:]
+    # 只补缺失: 跳过今天已入库的ETF(省Wind额度, 防超限)
+    have_today = {r[0] for r in conn.execute("SELECT DISTINCT symbol FROM stock_daily WHERE date=?", (TODAY,))}
+    need = [c for c in etfs if c not in have_today]
+    print(f"今日已有{len(have_today)}只, 待补{len(need)}只")
     done = fail = 0
     wind_fail_codes = []
     # 分批 Wind
