@@ -60,13 +60,19 @@ def guard_row(conn, symbol, date, volume, amount=None, fix=True):
             else:
                 return volume, amount, True
     if amount and amount > 0:
-        med = _hist_median(conn, symbol, date, 'amount')
-        if med and amount > med * ANOMALY_RATIO:
-            if fix:
-                amount = amount / 100.0
-                corrected = True
-            else:
-                return volume, amount, True
+        # ETF amount正确口径 = vol(手)×100份×close; 判定用自洽比而非中位数(中位数基准被历史口径污染)
+        row = conn.execute("SELECT volume, close FROM stock_daily WHERE symbol=? AND date=?", (symbol, date)).fetchone()
+        vol_now, close_now = row if row else (None, None)
+        if symbol[:2] in ('51', '15', '56', '58') and vol_now and close_now:
+            r = amount / (vol_now * close_now)
+            if 80 <= r <= 125:  # 偏大100倍(老口径对齐时会冒出, 不算错)
+                pass
+            elif r > 30 or r < 0.008:  # 明显异常才标记
+                if fix:
+                    amount = amount / 100.0
+                    corrected = True
+                else:
+                    return volume, amount, True
     return volume, amount, corrected
 
 
@@ -87,11 +93,12 @@ def scan_day(date, fix=False, conn=None):
             anomalies.append((sym, v, round(med, 1), 'volume'))
             if fix:
                 conn.execute("UPDATE stock_daily SET volume=volume/100.0 WHERE symbol=? AND date=?", (sym, date))
-        med_a = _hist_median(conn, sym, date, 'amount')
-        if amt and med_a and amt > med_a * ANOMALY_RATIO and amt > 0:
-            anomalies.append((sym, amt, round(med_a, 1), 'amount'))
-            if fix:
-                conn.execute("UPDATE stock_daily SET amount=amount/100.0 WHERE symbol=? AND date=?", (sym, date))
+        if amt and c and v and sym[:2] in ('51', '15', '56', '58'):
+            r = amt / (v * c)
+            if 0.8 <= r <= 1.25:  # 偏小100倍(历史老病: amount=vol手×close缺×100)
+                anomalies.append((sym, amt, round(v * c * 100, 1), 'amount_small'))
+                if fix:
+                    conn.execute("UPDATE stock_daily SET amount=amount*100.0 WHERE symbol=? AND date=?", (sym, date))
     if fix:
         conn.commit()
     if own:
