@@ -57,6 +57,7 @@ def _wccode(code):
 
 # ---------- 腾讯源(保留) ----------
 from backfill_v2 import fetch_kline_tx  # noqa: E402
+from volume_guard import guard_row  # noqa: E402  成交量单位守卫(根治股/手混写)
 
 def fqkline_qfq(code, market, start='2018-01-01', n=2000):
     url = (f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
@@ -119,8 +120,13 @@ def fetch_sina(code):
         return []
     f = sina_qfq_factors(code, mk)
     q = apply_qfq(k, f)
-    return [(x['day'], float(x['open']), float(x['high']), float(x['low']), float(x['close']),
-             float(x['volume']), round(float(x['volume']) * float(x['close']), 2), *q[i]) for i, x in enumerate(k)]
+    out = []
+    for i, x in enumerate(k):
+        # 新浪 volume=股 → ÷100转手(铁律); amount=vol(手)*close
+        v = float(x['volume']) / 100.0
+        out.append((x['day'], float(x['open']), float(x['high']), float(x['low']), float(x['close']),
+                    v, round(v * float(x['close']), 2), *q[i]))
+    return out
 
 # ---------- 降级链主流程(每日) ----------
 def write_rows(conn, code, rows):
@@ -160,6 +166,8 @@ def main():
                 o = float(rec.get('今日开盘价')); h = float(rec.get('今日最高价'))
                 l = float(rec.get('今日最低价')); c = float(rec.get('最新成交价'))
                 v = float(rec.get('成交量') or 0); amt = float(rec.get('成交额') or 0)
+                # 单位守卫: Wind若返回股(非手)自动÷100, amount同理
+                v, amt, _ = guard_row(conn, code, date, v, amt)
                 conn.execute(
                     "INSERT OR REPLACE INTO stock_daily (symbol,date,open,high,low,close,volume,amount,close_qfq,open_qfq,high_qfq,low_qfq) "
                     "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (code, date, o, h, l, c, v, amt, c, o, h, l))
@@ -190,6 +198,7 @@ def main():
             o = float(rec.get('今日开盘价')); h = float(rec.get('今日最高价'))
             l = float(rec.get('今日最低价')); c = float(rec.get('最新成交价'))
             v = float(rec.get('成交量') or 0); amt = float(rec.get('成交额') or 0)
+            v, amt, _ = guard_row(conn, code, date, v, amt)
             conn.execute(
                 "INSERT OR REPLACE INTO stock_daily (symbol,date,open,high,low,close,volume,amount,close_qfq,open_qfq,high_qfq,low_qfq) "
                 "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (code, date, o, h, l, c, v, amt, c, o, h, l))

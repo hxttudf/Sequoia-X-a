@@ -8,6 +8,7 @@ import sys
 from datetime import date, datetime
 
 import backfill_v2
+from volume_guard import guard_row  # 成交量单位守卫(根治股/手混写)
 
 DB_PATH = 'data/sequoia_v2.db'
 TODAY = date.today().isoformat()
@@ -88,8 +89,10 @@ def main():
                 fails += 1
                 failed_symbols.append(code)
             else:
+                # 单位守卫: 源若混入"股"单位自动÷100(腾讯本=手, 防未来源变更)
+                v, _, _ = guard_row(conn, code, TODAY, k['volume'], None)
                 row = (code, TODAY, k['open'], k['high'], k['low'],
-                       k['close'], k['volume'], round(k['volume'] * k['close'], 2),
+                       k['close'], v, round(v * k['close'], 2),
                        k.get('close_qfq'))
                 batch.append(row)
                 done += 1
