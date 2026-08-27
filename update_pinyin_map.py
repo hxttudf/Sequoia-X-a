@@ -26,4 +26,5 @@ for sym, name in rows:
         pmap[sym] = {'name': nm, 'initials': initials, 'full': full}
 
 json.dump(pmap, open(OUT, 'w'), ensure_ascii=False)
-print(f'拼音映射已刷新: {len(pmap)} 只 → {OUT}')
+# 注意: 不打印 OUT 绝对路径, 否则 cron no-agent 投递会把真实存在的 .json 路径当附件发给用户
+print(f'拼音映射已刷新: {len(pmap)} 只')
