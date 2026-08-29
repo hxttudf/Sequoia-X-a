@@ -79,12 +79,12 @@ def main():
                 (sym, d, o, h, l, c, v, c, o, h, l,
                  datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
             inserted += 1
-        # basics登记(指数is_etf=0, close=最新)
+        # basics登记(指数is_etf=2: 0=股票/1=ETF/2=指数, close=最新)
         if rows:
             lr = rows[-1]
             cur.execute(
                 "INSERT OR REPLACE INTO stock_basics (symbol,date,name,close,mktcap,nmc,updated_at,is_etf) "
-                "VALUES (?,?,?,?,?,?,datetime('now','localtime'),0)",
+                "VALUES (?,?,?,?,?,?,datetime('now','localtime'),2)",
                 (sym, lr[0], NAMES[sym], float(lr[2]), 0, 0))
         total_new += inserted
         new_last = cur.execute("SELECT MAX(date) FROM stock_daily WHERE symbol=?", (sym,)).fetchone()[0]
