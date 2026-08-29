@@ -71,12 +71,12 @@ def main():
                 continue
             if last and d <= last and not full:
                 continue
-            # 指数无复权: close_qfq=close; amount=v手×close(近似, 指数amount口径=成交额亿? 存vol×close自洽即可)
+            # 指数无复权: close_qfq=close; 成交额腾讯指数日线不提供, amount/turnover留空(前端显示0, 与ETF一致)
             cur.execute(
                 "INSERT OR REPLACE INTO stock_daily "
-                "(symbol,date,open,high,low,close,volume,amount,close_qfq,open_qfq,high_qfq,low_qfq,update_time) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (sym, d, o, h, l, c, v, round(v * c, 2), c, o, h, l,
+                "(symbol,date,open,high,low,close,volume,close_qfq,open_qfq,high_qfq,low_qfq,update_time) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (sym, d, o, h, l, c, v, c, o, h, l,
                  datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
             inserted += 1
         # basics登记(指数is_etf=0, close=最新)
