@@ -40,7 +40,7 @@ def main():
         # 降级: 用本地stock_basics表(上次fetch_basics更新的全量列表)
         conn0 = sqlite3.connect(DB_PATH)
         all_stocks = [(r[0], r[1], '1' if r[0].startswith(('6', '9')) else '0')
-                      for r in conn0.execute("SELECT symbol, name FROM stock_basics WHERE is_etf!=1 AND symbol NOT LIKE '%.%'")]
+                      for r in conn0.execute("SELECT symbol, name FROM stock_basics WHERE is_etf=0")]
         conn0.close()
         print(f'新浪列表失败, 降级用本地表: {len(all_stocks)} 只')
     if not all_stocks:
