@@ -71,6 +71,10 @@ def main():
                 continue
             if last and d <= last and not full:
                 continue
+            # 完整性校验: high>=max(o,c) 且 low<=min(o,c) — 防列序错位入库(曾发生[open,close,high,low]被当[open,high,low,close]写入)
+            if h < max(o, c) - 1e-6 or l > min(o, c) + 1e-6:
+                print(f"  ⚠跳过异常行 {sym} {d}: o={o} h={h} l={l} c={c}")
+                continue
             # 指数无复权: close_qfq=close; 成交额腾讯指数日线不提供, amount/turnover留空(前端显示0, 与ETF一致)
             cur.execute(
                 "INSERT OR REPLACE INTO stock_daily "
