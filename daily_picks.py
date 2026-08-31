@@ -513,7 +513,7 @@ def backfill_top10_returns():
         if not future: continue
         rets = {}
         for off, col in [(1,"ret_1d"),(3,"ret_3d"),(5,"ret_5d"),(10,"ret_10d")]:
-            if off <= len(future):
+            if off <= len(future) and future[off-1][0]:
                 rets[col] = round((future[off-1][0]/bp-1)*100, 2)
         if rets:
             sets = ", ".join(f"{k}=?" for k in rets)

@@ -75,7 +75,8 @@ def fetch_tencent(code):
     if not kl:
         return []
     q = fqkline_qfq(code, mk)
-    qmap = {r[0]: (float(r[1]), float(r[2]), float(r[3]), float(r[4])) for r in q}
+    qmap = {r[0]: (float(r[1]), float(r[2]), float(r[3]), float(r[4]))
+            for r in q if r[1] is not None and r[2] is not None and r[3] is not None and r[4] is not None}
     out = []
     for k in kl:
         o, c, h, l = qmap.get(k['date'], (k['open'], k['close'], k['high'], k['low']))
@@ -128,6 +129,34 @@ def fetch_sina(code):
                     v, round(v * float(x['close']), 2), *q[i]))
     return out
 
+def _qt_today_k(code):
+    """腾讯qt实时快照合成当日K(fqkline/Wind失败时兜底). 不复权: qfq四列=OHLC"""
+    import subprocess as _sp
+    prefix = "sh" if code[0] == "5" else "sz"
+    url = f"https://qt.gtimg.cn/q={prefix}{code}"
+    try:
+        r = _sp.run(["curl", "-sL", "-m", "12", "--noproxy", "*", url,
+                     "-H", "Referer: https://gu.qq.com/"], capture_output=True)
+        t = r.stdout.decode("gbk", errors="ignore").strip()
+        if "=" not in t or "~" not in t:
+            return None
+        f = t.split('"')[1].split("~")
+        if len(f) < 38:
+            return None
+        price, openp = float(f[3]), float(f[5])
+        if price <= 0 or openp <= 0:
+            return None
+        hi, lo = float(f[33]), float(f[34])
+        if hi < max(openp, price) or lo > min(openp, price):
+            return None
+        vol = float(f[6])  # 手
+        amt = float(f[37]) * 1e4 if f[37] else 0.0
+        return {"date": TODAY, "open": openp, "high": hi, "low": lo, "close": price,
+                "volume": vol, "amount": amt, "close_qfq": price}
+    except Exception:
+        return None
+
+
 # ---------- 降级链主流程(每日) ----------
 def write_rows(conn, code, rows):
     if rows:
@@ -163,8 +192,11 @@ def main():
             for code, rec in rows:
                 d = rec.get('最新交易日') or ''
                 date = f"{d[:4]}-{d[4:6]}-{d[6:]}" if len(d) == 8 else TODAY
-                o = float(rec.get('今日开盘价')); h = float(rec.get('今日最高价'))
-                l = float(rec.get('今日最低价')); c = float(rec.get('最新成交价'))
+                _vals = [rec.get('今日开盘价'), rec.get('今日最高价'), rec.get('今日最低价'), rec.get('最新成交价')]
+                if any(v is None for v in _vals):
+                    wind_fail_codes.append(code)  # 停牌/字段缺失 → 降级链确认
+                    continue
+                o, h, l, c = (float(v) for v in _vals)
                 v = float(rec.get('成交量') or 0); amt = float(rec.get('成交额') or 0)
                 # 单位守卫: Wind若返回股(非手)自动÷100, amount同理
                 v, amt, _ = guard_row(conn, code, date, v, amt)
@@ -195,8 +227,12 @@ def main():
             rec = single[0][1]
             d = rec.get('最新交易日') or ''
             date = f"{d[:4]}-{d[4:6]}-{d[6:]}" if len(d) == 8 else TODAY
-            o = float(rec.get('今日开盘价')); h = float(rec.get('今日最高价'))
-            l = float(rec.get('今日最低价')); c = float(rec.get('最新成交价'))
+            _vals = [rec.get('今日开盘价'), rec.get('今日最高价'), rec.get('今日最低价'), rec.get('最新成交价')]
+            if any(v is None for v in _vals):
+                fail_codes.append(code)
+                time.sleep(0.1)
+                continue
+            o, h, l, c = (float(v) for v in _vals)
             v = float(rec.get('成交量') or 0); amt = float(rec.get('成交额') or 0)
             v, amt, _ = guard_row(conn, code, date, v, amt)
             conn.execute(
@@ -206,9 +242,25 @@ def main():
         else:
             fail_codes.append(code)
             time.sleep(0.1)
+    # 3) qt实时兜底(腾讯fqkline限流时qt不限): 收盘后合成当日K
+    qt_done = 0
+    still_fail = []
+    for code in fail_codes:
+        k = _qt_today_k(code)
+        if k:
+            v, amt, _ = guard_row(conn, code, TODAY, k['volume'], k['amount'])
+            conn.execute(
+                "INSERT OR REPLACE INTO stock_daily (symbol,date,open,high,low,close,volume,amount,close_qfq,open_qfq,high_qfq,low_qfq) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (code, k['date'], k['open'], k['high'], k['low'], k['close'], v, amt, k['close_qfq'], k['open'], k['high'], k['low']))
+            qt_done += 1
+        else:
+            still_fail.append(code)
+        time.sleep(0.05)
+    done += qt_done
     conn.commit()
     conn.close()
-    print(f"✅ Wind批量+单只确认完成: {done}只成功, {len(fail_codes)}只待源恢复后补: {fail_codes[:8]}")
+    print(f"✅ ETF日线完成: Wind{done - qt_done}只 + qt兜底{qt_done}只 = {done}只, 待源恢复{len(still_fail)}只: {still_fail[:8]}")
 
 if __name__ == '__main__':
     main()

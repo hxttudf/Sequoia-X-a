@@ -16,6 +16,31 @@ DB = '/home/ubuntu/Sequoia-X-a/data/sequoia_v2.db'
 TODAY = date.today().isoformat()
 
 # symbol → 腾讯代码 (沿用库内既有后缀风格 .SH/.SZ)
+def _qt_index_today(txcode):
+    """腾讯qt实时快照合成指数当日K(fqkline风控兜底). 返回[date,open,close,high,low]或None"""
+    import subprocess as _sp
+    try:
+        r = _sp.run(["curl", "-sL", "-m", "12", "--noproxy", "*", f"https://qt.gtimg.cn/q={txcode}",
+                     "-H", "Referer: https://gu.qq.com/"], capture_output=True)
+        t = r.stdout.decode("gbk", errors="ignore").strip()
+        if "=" not in t or "~" not in t:
+            return None
+        f = t.split('"')[1].split("~")
+        if len(f) < 38:
+            return None
+        price, openp = float(f[3]), float(f[5])
+        if price <= 0 or openp <= 0:
+            return None
+        hi, lo = float(f[33]), float(f[34])
+        if hi < max(openp, price) or lo > min(openp, price):
+            return None
+        ts = f[30]  # yyyymmddHHMMSS
+        d = f"{ts[:4]}-{ts[4:6]}-{ts[6:8]}"
+        return {"date": d, "open": openp, "close": price, "high": hi, "low": lo}
+    except Exception:
+        return None
+
+
 INDEXES = {
     '000001.SH': 'sh000001',   # 上证指数
     '399001.SZ': 'sz399001',   # 深证成指
@@ -61,11 +86,21 @@ def main():
             n = 800
         rows = tencent_index_kline(txcode, n=n)
         if not rows:
+            # 腾讯K线接口风控 → qt实时快照兜底(仅当日1根)
+            k = _qt_index_today(txcode)
+            rows = [[k['date'], k['open'], k['close'], k['high'], k['low']]] if k else []
+            src_tag = '(qt兜底)' if rows else ''
+        else:
+            src_tag = ''
+        if not rows:
             report.append(f"{sym}: 拉取失败")
             continue
         inserted = 0
         for row in rows:
-            d, o, c, h, l = row[0], float(row[1]), float(row[2]), float(row[3]), float(row[4])
+            try:
+                d, o, c, h, l = row[0], float(row[1]), float(row[2]), float(row[3]), float(row[4])
+            except (TypeError, ValueError):
+                continue  # 腾讯风控/脏行跳过
             v = float(row[5]) if len(row) > 5 and row[5] else 0.0
             if d == last:
                 continue
