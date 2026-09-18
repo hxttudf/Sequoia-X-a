@@ -20,14 +20,44 @@ def now_str():
     return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
 
+def _qt_today_k(code, market):
+    """腾讯qt实时快照合成当日K(fqkline限流时兜底; 收盘后=当日完整K). 不复权: close_qfq=close"""
+    import subprocess as _sp
+    prefix = "sh" if market == "1" else "sz"
+    code_qt = code.split(".")[0] if "." in code else code
+    url = f"https://qt.gtimg.cn/q={prefix}{code_qt}"
+    try:
+        r = _sp.run(["curl", "-sL", "-m", "12", "--noproxy", "*", url,
+                     "-H", "Referer: https://gu.qq.com/"], capture_output=True)
+        t = r.stdout.decode("gbk", errors="ignore").strip()
+        if "=" not in t or "~" not in t:
+            return None
+        f = t.split('"')[1].split("~")
+        if len(f) < 38:
+            return None
+        price, prev, openp = float(f[3]), float(f[4]), float(f[5])
+        if price <= 0 or openp <= 0:
+            return None
+        # 索引(实测): [30]时间戳 [31]涨跌额 [32]涨跌幅% [33]最高 [34]最低 [35]价/量/额 [36]量(手) [37]额(万元)
+        hi, lo = float(f[33]), float(f[34])
+        if hi < max(openp, price) or lo > min(openp, price):
+            return None  # 字段口径变化防护
+        vol = float(f[6])
+        amt = float(f[37]) * 1e4 if f[37] else 0.0
+        return {"date": TODAY, "open": openp, "high": hi, "low": lo, "close": price,
+                "volume": vol, "close_qfq": price, "amount": amt}
+    except Exception:
+        return None
+
+
 def fetch_one(code, name, market):
     klines = backfill_v2.fetch_kline_tx(code, market)
-    if not klines:
-        return code, None
-    for k in klines:
-        if k['date'] == TODAY:
-            return code, k
-    return code, None
+    if klines:
+        today = next((k for k in klines if k['date'] == TODAY), None)
+        return code, today, klines   # 第3项=全窗口(含close_qfq), 供close_qfq自愈回写
+    # fqkline失败/无今日根(限流) → 腾讯qt实时合成当日K
+    k = _qt_today_k(code, market)
+    return (code, k, []) if k else (code, None, [])
 
 
 def main():
@@ -75,49 +105,106 @@ def main():
 
     done = fails = 0
     failed_symbols = []
+    qfq_fixed = 0
+    ins_fixed = 0
     batch = []
+    qfq_batch = []
+    ins_batch = []   # 整根缺失补插(带OHLC+量) — UPDATE补不上缺失行, 必须INSERT
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
         futures = {executor.submit(fetch_one, c, n, m): c for c, n, m in to_fetch}
         for future in concurrent.futures.as_completed(futures):
             try:
-                code, k = future.result(timeout=30)
+                code, k, klines = future.result(timeout=30)
             except Exception:
                 code = futures[future]
-                k = None
+                k, klines = None, []
+            if klines:
+                # 自愈(独立于当日根): ①整根缺失→INSERT补根 ②close_qfq不一致→UPDATE(前复权回溯性)
+                stored = {r[0]: r[1] for r in conn.execute(
+                    "SELECT date, close_qfq FROM stock_daily WHERE symbol=?", (code,))}
+                for w in klines:
+                    nq = w.get('close_qfq')
+                    if nq is None:
+                        continue
+                    oq = stored.get(w['date'])
+                    if oq is None:
+                        # 整根缺失 → 补插(带完整OHLC+量); 防脏数据: 仅补合法根
+                        if w.get('close') and w.get('open'):
+                            vol = w.get('volume') or 0
+                            amt = w.get('amount') or round(vol * w['close'], 2)
+                            _r = (nq / w['close']) if w.get('close') else 1.0
+                            ins_batch.append((code, w['date'], w['open'], w['high'], w['low'],
+                                              w['close'], vol, amt, nq,
+                                              round(w['open'] * _r, 3), round(w['high'] * _r, 3), round(w['low'] * _r, 3)))
+                    elif abs(nq - oq) > 0.0005:
+                        # 一并修 o/h/l_qfq: 除权后原只改 close_qfq → OHLC 不一致(阴/阳线错乱)
+                        _r = (nq / w['close']) if w.get('close') else 1.0
+                        qfq_batch.append((nq, round(w['open'] * _r, 3), round(w['high'] * _r, 3),
+                                          round(w['low'] * _r, 3), code, w['date']))
             if k is None:
                 fails += 1
                 failed_symbols.append(code)
             else:
                 # 单位守卫: 源若混入"股"单位自动÷100(腾讯本=手, 防未来源变更)
                 v, _, _ = guard_row(conn, code, TODAY, k['volume'], None)
+                _cq = k.get('close_qfq')
+                _r = (_cq / k['close']) if (_cq and k.get('close')) else 1.0
                 row = (code, TODAY, k['open'], k['high'], k['low'],
-                       k['close'], v, round(v * k['close'], 2),
-                       k.get('close_qfq'))
+                       k['close'], v, round(v * k['close'], 2), _cq,
+                       round(k['open'] * _r, 3), round(k['high'] * _r, 3), round(k['low'] * _r, 3))
                 batch.append(row)
                 done += 1
                 if len(batch) >= 200:
                     conn.executemany(
                         'INSERT OR REPLACE INTO stock_daily '
-                        '(symbol,date,open,high,low,close,volume,turnover,close_qfq,update_time) '
-                        'VALUES (?,?,?,?,?,?,?,?,?,?)',
+                        '(symbol,date,open,high,low,close,volume,turnover,close_qfq,open_qfq,high_qfq,low_qfq,update_time) '
+                        'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
                         [b + (now_str(),) for b in batch]
                     )
+                    if ins_batch:
+                        conn.executemany(
+                            'INSERT OR REPLACE INTO stock_daily '
+                            '(symbol,date,open,high,low,close,volume,turnover,close_qfq,open_qfq,high_qfq,low_qfq,update_time) '
+                            'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                            [b + (now_str(),) for b in ins_batch])
+                        ins_fixed += len(ins_batch)
+                        ins_batch.clear()
+                    if qfq_batch:
+                        conn.executemany('UPDATE stock_daily SET close_qfq=?,open_qfq=?,high_qfq=?,low_qfq=? WHERE symbol=? AND date=?', qfq_batch)
+                        qfq_fixed += len(qfq_batch)
+                        qfq_batch.clear()
                     conn.commit()
                     elapsed = (datetime.now() - t0).total_seconds()
                     rate = done / elapsed if elapsed > 0 else 0
                     print(f'[{ts()}] {done}/{len(to_fetch)}  '
-                          f'({done*100//len(to_fetch)}%) {rate:.1f}/s  失败{fails}')
+                          f'({done*100//len(to_fetch)}%) {rate:.1f}/s  失败{fails}  修qfq{qfq_fixed}  补根{ins_fixed}')
                     batch.clear()
 
     if batch:
         conn.executemany(
             'INSERT OR REPLACE INTO stock_daily '
-            '(symbol,date,open,high,low,close,volume,turnover,close_qfq,update_time) '
-            'VALUES (?,?,?,?,?,?,?,?,?,?)',
+            '(symbol,date,open,high,low,close,volume,turnover,close_qfq,open_qfq,high_qfq,low_qfq,update_time) '
+            'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
             [b + (now_str(),) for b in batch]
         )
         conn.commit()
+    if ins_batch:
+        conn.executemany(
+            'INSERT OR REPLACE INTO stock_daily '
+            '(symbol,date,open,high,low,close,volume,turnover,close_qfq,open_qfq,high_qfq,low_qfq,update_time) '
+            'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            [b + (now_str(),) for b in ins_batch])
+        ins_fixed += len(ins_batch)
+        ins_batch.clear()
+        conn.commit()
+    if qfq_batch:
+        conn.executemany('UPDATE stock_daily SET close_qfq=? WHERE symbol=? AND date=?', qfq_batch)
+        qfq_fixed += len(qfq_batch)
+        qfq_batch.clear()
+        conn.commit()
+    if ins_fixed or qfq_fixed:
+        print(f'自愈合计: 补根{ins_fixed}行, 修qfq{qfq_fixed}行')
 
     total_valid = len(to_fetch) if to_fetch else len(filtered)
     fail_rate = fails / total_valid if total_valid else 0.0
