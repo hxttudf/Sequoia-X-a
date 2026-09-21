@@ -4,7 +4,8 @@
 全库口径(铁律):
   stock_daily.volume = 手 (A股/ETF统一), amount = 元
   新浪/Wind getKLineData 原始 = 股 → 入库前必须 ÷100
-  腾讯 fetch_kline_tx = 手 → 原样
+  腾讯 fetch_kline_tx = 主板/创业 手(原样); 但科创板(688) 返回"股" → 必须÷100
+  ⚠ 科创板(688)腾讯返回"股"且整段一致 → 30×中位数守卫抓不到, 由 L2/L3 "自洽兜底"(换手>300%)纠正
 
 守卫机制(三层):
   L1 静态转换: 新浪源数据调用 normalize_sina(volume, amount) 强制÷100
@@ -40,6 +41,16 @@ def _hist_median(conn, symbol, before_date, col='volume'):
     return _median([r[0] for r in rows])
 
 
+def _latest_float(conn, symbol, date):
+    """某symbol在date前最新的流通股本(股)."""
+    r = conn.execute("SELECT listed_a_shares FROM stock_equity WHERE symbol=? AND end_date<=? AND listed_a_shares>0 "
+                     "ORDER BY end_date DESC LIMIT 1", (symbol, date)).fetchone()
+    if not r:
+        r = conn.execute("SELECT listed_a_shares FROM stock_equity WHERE symbol=? AND listed_a_shares>0 "
+                         "ORDER BY end_date LIMIT 1", (symbol,)).fetchone()
+    return r[0] if r else None
+
+
 def normalize_sina(volume, amount=None):
     """L1: 新浪原始数据(股/元) → 库内口径(手/元). 新浪amount已是元, 不动."""
     v = (volume or 0) / 100.0
@@ -59,6 +70,15 @@ def guard_row(conn, symbol, date, volume, amount=None, fix=True):
                 corrected = True
             else:
                 return volume, amount, True
+        # 自洽兜底: 用流通股本反推换手率(volume手*100/流通股). >300% 必为"股"单位(与源无关, 抓"整段一致错")
+        if not corrected:
+            flt = _latest_float(conn, symbol, date)
+            if flt and volume * 100.0 / flt > 3.0:
+                if fix:
+                    volume = volume / 100.0
+                    corrected = True
+                else:
+                    return volume, amount, True
     if amount and amount > 0:
         # ETF amount正确口径 = vol(手)×100份×close; 判定用自洽比而非中位数(中位数基准被历史口径污染)
         row = conn.execute("SELECT volume, close FROM stock_daily WHERE symbol=? AND date=?", (symbol, date)).fetchone()
@@ -87,12 +107,17 @@ def scan_day(date, fix=False, conn=None):
     anomalies = []
     for sym, v, amt, c, cq in rows:
         med = _hist_median(conn, sym, date, 'volume')
-        if not med:
-            continue
-        if v > med * ANOMALY_RATIO:
+        _bad = False
+        if med and v > med * ANOMALY_RATIO:
+            _bad = True
             anomalies.append((sym, v, round(med, 1), 'volume'))
-            if fix:
-                conn.execute("UPDATE stock_daily SET volume=volume/100.0 WHERE symbol=? AND date=?", (sym, date))
+        if not _bad:
+            flt = _latest_float(conn, sym, date)
+            if flt and v * 100.0 / flt > 3.0:   # 自洽兜底: 换手>300% → "股"单位
+                _bad = True
+                anomalies.append((sym, v, 'turnover>300%', 'unit'))
+        if _bad and fix:
+            conn.execute("UPDATE stock_daily SET volume=volume/100.0 WHERE symbol=? AND date=?", (sym, date))
         if amt and c and v and sym[:2] in ('51', '15', '56', '58'):
             r = amt / (v * c)
             if 0.8 <= r <= 1.25:  # 偏小100倍(历史老病: amount=vol手×close缺×100)
