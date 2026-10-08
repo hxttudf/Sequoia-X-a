@@ -11,24 +11,35 @@ def fetch_all_basics():
     today = date.today().strftime("%Y-%m-%d")
     total = 0
     
-    for page in range(1, 200):
+    def _page(p):
+        """取单页; 间歇性空响应最多重试5次(防分页被瞬时空页截断)"""
         url = (
             "http://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/"
-            f"Market_Center.getHQNodeData?page={page}&num=80&sort=symbol&asc=1"
+            f"Market_Center.getHQNodeData?page={p}&num=80&sort=symbol&asc=1"
             "&node=hs_a&symbol=&_s_r_a=init"
         )
-        r = subprocess.run(
-            ["curl", "-sL", "--connect-timeout", "8", "--max-time", "15", url],
-            capture_output=True, text=True, timeout=20)
-        
-        try:
-            stocks = json.loads(r.stdout)
-        except:
-            break
-        
-        if not stocks or not isinstance(stocks, list):
-            break
-        
+        for _ in range(5):
+            r = subprocess.run(
+                ["curl", "-sL", "--connect-timeout", "8", "--max-time", "15", url],
+                capture_output=True, text=True, timeout=20)
+            try:
+                d = json.loads(r.stdout)
+            except Exception:
+                d = None
+            if isinstance(d, list) and len(d) > 0:
+                return d
+            time.sleep(0.6)
+        return None
+
+    empty_streak = 0
+    for page in range(1, 200):
+        stocks = _page(page)
+        if stocks is None:
+            empty_streak += 1
+            if empty_streak >= 3:
+                break
+            continue
+        empty_streak = 0
         for s in stocks:
             code = s.get("code", "")
             if not code:

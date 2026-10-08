@@ -21,23 +21,38 @@ def curl(url: str) -> dict | None:
     except:
         return None
 
+def _fetch_list_page(page: int):
+    """取单页; 间歇性空响应最多重试5次(防分页被瞬时空页截断)"""
+    url = (f"http://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/"
+           f"Market_Center.getHQNodeData?page={page}&num=80&sort=symbol&asc=1"
+           f"&node=hs_a&symbol=&_s_r_a=init")
+    for _ in range(5):
+        d = curl(url)
+        if isinstance(d, list) and len(d) > 0:
+            return d
+        time.sleep(0.6)
+    return None
+
+
 def get_all_stocks_sina() -> list[tuple[str, str, str]]:
-    """新浪分页获取全量A股"""
+    """新浪分页获取全量A股(单页失败重试; 连续3个空页才算真结尾)"""
     stocks = []
+    empty_streak = 0
     for page in range(1, 200):
-        url = (f"http://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/"
-               f"Market_Center.getHQNodeData?page={page}&num=80&sort=symbol&asc=1"
-               f"&node=hs_a&symbol=&_s_r_a=init")
-        data = curl(url)
-        if not data or not isinstance(data, list) or len(data) == 0:
-            break
-        for item in data:
+        d = _fetch_list_page(page)
+        if d is None:
+            empty_streak += 1
+            if empty_streak >= 3:      # 连续3页取不到 → 真结尾(或源持续故障, return 已有)
+                break
+            continue
+        empty_streak = 0
+        for item in d:
             code = item.get("code", "")
             name = item.get("name", "")
             mkt = "1" if code.startswith(("6", "9")) else "0"
             if code:
                 stocks.append((code, name, mkt))
-        if len(data) < 80:
+        if len(d) < 80:
             break
         time.sleep(0.05)
     return stocks
@@ -45,7 +60,8 @@ def get_all_stocks_sina() -> list[tuple[str, str, str]]:
 def fetch_kline_tx(code: str, market: str) -> list[dict]:
     """腾讯API获取后复权日K + 前复权收盘价"""
     prefix = "sh" if market == "1" else "sz"
-    base = f"http://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={prefix}{code},day,,,640,"
+    # 主域=web.ifzq易限流; 改用 proxy.finance.qq.com(同数据,未被限流) — 2026-09-12治复权断层
+    base = f"http://proxy.finance.qq.com/ifzqgtimg/appstock/app/fqkline/get?param={prefix}{code},day,,,640,"
     
     # 后复权（主数据）
     data = curl(base + "hfq")
