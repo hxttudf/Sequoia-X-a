@@ -214,6 +214,21 @@ def main():
     else:
         ok = fail_rate < 0.05
 
+    # 完整性闸: 当日个股实际覆盖 < 应拉60% = 数据源未就绪/拉取半空 → 判失败(防"跑太早假成功")
+    # 动因(2026-10-26事故): 15:08 收盘8分钟就拉, 腾讯还没发布当日K线, 个股仅入7只但 exit 0
+    try:
+        _after = {r[0] for r in conn.execute(
+            'SELECT DISTINCT symbol FROM stock_daily WHERE date = ?', (TODAY,))}
+        covered = sum(1 for c, _, _ in filtered if c in _after)
+    except Exception:
+        covered = -1
+    expected = len(filtered)
+    cover_rate = (covered / expected) if (expected and covered >= 0) else 1.0
+    if expected and covered >= 0 and cover_rate < 0.60:
+        ok = False
+        print(f'⚠ 完整性闸: 当日个股仅覆盖 {covered}/{expected} ({cover_rate:.0%}) < 60% '
+              f'— 判失败(数据源可能尚未发布当日K线)')
+
     elapsed = (datetime.now() - t0).total_seconds() / 60
 
     # 写失败股票列表
@@ -231,6 +246,8 @@ def main():
         'new': done,
         'fail': fails,
         'fail_rate': round(fail_rate, 4),
+        'covered': covered,
+        'cover_rate': round(cover_rate, 4),
         'ok': ok,
         'elapsed_min': round(elapsed, 1)
     }
@@ -246,7 +263,8 @@ def main():
         conn.close()  # 日志写入后再关闭连接(修复 closed database)
 
     if not ok:
-        print(f'⚠ 失败率 {fail_rate:.1%} 超标（阈值5%），退出码1')
+        reason = '当日个股覆盖不足(数据源未发布/拉取半空)' if (covered >= 0 and cover_rate < 0.60) else f'失败率 {fail_rate:.1%} 超标(阈值5%)'
+        print(f'⚠ {reason}，退出码1')
         sys.exit(1)
 
 
